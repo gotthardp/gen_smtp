@@ -66,7 +66,7 @@
 		{default_mime_version, ?DEFAULT_MIME_VERSION} % default mime version
 	]).
 
--type(mimetuple() :: {binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [{binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [tuple()]}] | tuple()}).
+-type(mimetuple() :: {binary(), binary(), [{binary(), binary()}], [{binary(), binary() | [{binary(), binary()}]}], binary() | [{binary(), binary(), [{binary(), binary()}], [{binary(), binary()}], binary() | [tuple()]}] | tuple()}).
 
 -type(options() :: [{'encoding', binary()} | {'decode_attachment', boolean()} | {'dkim', [{atom(), any()}]}]).
 
@@ -239,6 +239,9 @@ decode_header_tokens_permissive([Data | Tokens], Charset, Stack) ->
 	decode_header_tokens_permissive(Tokens, Charset, [Data | Stack]).
 
 
+%% x-binaryenc is not a real encoding and is not used for text, so let it pass through
+convert(_To, <<"x-binaryenc">>, Data) ->
+    {ok, Data};
 convert(To, From, Data) ->
 	IconvMod = iconv, %% Fool xref.
 	CD = case IconvMod:open(To, From) of
@@ -482,6 +485,9 @@ decode_body(Type, Body, _InEncoding, none) ->
 	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
 decode_body(Type, Body, undefined, _OutEncoding) ->
 	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
+decode_body(Type, Body, <<"x-binaryenc">>, _OutEncoding) ->
+	% Not IANA and does not represent text, so we pass it through
+	decode_body(Type, Body);
 decode_body(Type, Body, InEncoding, OutEncoding) ->
 	IconvMod = iconv, %% Fool xref.
 	NewBody = decode_body(Type, Body),
@@ -893,12 +899,12 @@ encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $!, H =< $< ->
 encode_quoted_printable(<<H, T/binary>>, Acc, L) when H >= $>, H =< $~ ->
 	encode_quoted_printable(T, [H | Acc], L+1);
 encode_quoted_printable(<<H, $\r, $\n, T/binary>>, Acc, _L) when H == $\s; H == $\t ->
-	[[A, B]] = io_lib:format("~2.16.0B", [H]),
+	[A, B] = lists:flatten(io_lib:format("~2.16.0B", [H])),
 	encode_quoted_printable(T, [$\n, $\r, B, A, $= | Acc], 0);
 encode_quoted_printable(<<H, T/binary>>, Acc, L) when H == $\s; H == $\t ->
 	encode_quoted_printable(T, [H | Acc], L+1);
 encode_quoted_printable(<<H, T/binary>>, Acc, L) ->
-	[[A, B]] = io_lib:format("~2.16.0B", [H]),
+	[A, B] = lists:flatten(io_lib:format("~2.16.0B", [H])),
 	encode_quoted_printable(T, [B, A, $= | Acc], L+3).
 
 get_default_encoding() ->

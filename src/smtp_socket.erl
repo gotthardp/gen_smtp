@@ -20,7 +20,7 @@
 %%% WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 %% @doc Facilitates transparent gen_tcp/ssl socket handling
--module(socket).
+-module(smtp_socket).
 
 
 -define(TCP_LISTEN_OPTIONS,[  {active, false},
@@ -74,6 +74,8 @@
 -type protocol() :: 'tcp' | 'ssl'.
 -type address() :: inet:ip_address() | string() | binary().
 -type socket() :: ssl:sslsocket() | gen_tcp:socket().
+
+-export_type([socket/0]).
 
 %%%-----------------------------------------------------------------
 %%% API
@@ -220,15 +222,15 @@ handle_inet_async(ListenObject, ClientSocket, Options) ->
 	end.
 
 %% @doc Upgrade a TCP connection to SSL
--spec to_ssl_server(Socket :: socket()) -> {'ok', ssl:socket()} | {'error', any()}.
+-spec to_ssl_server(Socket :: socket()) -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_server(Socket) ->
 	to_ssl_server(Socket, []).
 
--spec to_ssl_server(Socket :: socket(), Options :: list()) -> {'ok', ssl:socket()} | {'error', any()}.
+-spec to_ssl_server(Socket :: socket(), Options :: list()) -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_server(Socket, Options) ->
 	to_ssl_server(Socket, Options, infinity).
 
--spec to_ssl_server(Socket :: socket(), Options :: list(), Timeout :: non_neg_integer() | 'infinity') -> {'ok', ssl:socket()} | {'error', any()}.
+-spec to_ssl_server(Socket :: socket(), Options :: list(), Timeout :: non_neg_integer() | 'infinity') -> {'ok', ssl:sslsocket()} | {'error', any()}.
 to_ssl_server(Socket, Options, Timeout) when is_port(Socket) ->
 	ssl:ssl_accept(Socket, ssl_listen_options(Options), Timeout);
 to_ssl_server(_Socket, _Options, _Timeout) ->
@@ -327,9 +329,9 @@ set_sockopt(ListenObject, ClientSocket) ->
 		{ok, Opts} ->
 			case prim_inet:setopts(ClientSocket, Opts) of
 				ok -> ok;
-				Error -> socket:close(ClientSocket), Error
+				Error -> smtp_socket:close(ClientSocket), Error
 			end;
-		Error -> socket:close(ClientSocket), Error
+		Error -> smtp_socket:close(ClientSocket), Error
 	end.
 
 -ifdef(TEST).
@@ -626,7 +628,7 @@ ssl_upgrade_test_() ->
 			spawn(fun() ->
 			      	{ok, ListenSocket} = listen(tcp, ?TEST_PORT),
 			      	{ok, ServerSocket} = accept(ListenSocket),
-							{ok, NewServerSocket} = socket:to_ssl_server(ServerSocket, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
+							{ok, NewServerSocket} = smtp_socket:to_ssl_server(ServerSocket, [{keyfile, "test/fixtures/server.key"}, {certfile, "test/fixtures/server.crt"}]),
 			      	Self ! NewServerSocket
 			      end),
 			{ok, ClientSocket} = connect(tcp, "localhost", ?TEST_PORT),
