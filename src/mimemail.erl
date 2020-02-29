@@ -451,7 +451,7 @@ parse_headers(Body, Line, Headers) ->
 			{lists:reverse(Headers), list_to_binary([Line, "\r\n", Body])};
 		Index ->
 			FieldName = binstr:substr(Line, 1, Index - 1),
-			F = fun(X) -> X > 32 andalso X < 127 end,
+			F = fun(X) -> (X > 31 andalso X < 59) andalso (X > 59 andalso X < 127) end,
 			case binstr:all(F, FieldName) of
 				true ->
 					F2 = fun(X) -> (X > 31 andalso X < 127) orelse X == 9 end,
