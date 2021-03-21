@@ -57,37 +57,37 @@
 		{'port', pos_integer()} | {'protocol', 'tcp' | 'ssl'} | {'sessionoptions', [any()]}]).
 
 %% @doc Start the listener as a registered process with callback module `Module' on with options `Options' linked to the calling process.
--spec(start_link/3 :: (ServerName :: {'local', atom()} | {'global', any()}, Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+-spec start_link(ServerName :: {'local', atom()} | {'global', any()}, Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
 start_link(ServerName, Module, Options) when is_list(Options) ->
 	gen_server:start_link(ServerName, ?MODULE, [Module, Options], []).
 
 %% @doc Start the listener with callback module `Module' on with options `Options' linked to the calling process.
--spec(start_link/2 :: (Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+-spec start_link(Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
 start_link(Module, Options) when is_list(Options) ->
 	gen_server:start_link(?MODULE, [Module, Options], []).
 
 %% @doc Start the listener with callback module `Module' with default options linked to the calling process.
--spec(start_link/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+-spec start_link(Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}.
 start_link(Module) ->
 	start_link(Module, [[]]).
 
 %% @doc Start the listener as a registered process with callback module `Module' with options `Options' linked to no process.
--spec(start/3 :: (ServerName :: {'local', atom()} | {'global', any()}, Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+-spec start(ServerName :: {'local', atom()} | {'global', any()}, Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
 start(ServerName, Module, Options) when is_list(Options) ->
 	gen_server:start(ServerName, ?MODULE, [Module, Options], []).
 
 %% @doc Start the listener with callback module `Module' with options `Options' linked to no process.
--spec(start/2 :: (Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+-spec start(Module :: atom(), Options :: [options()]) -> {'ok', pid()} | 'ignore' | {'error', any()}.
 start(Module, Options) when is_list(Options) ->
 	gen_server:start(?MODULE, [Module, Options], []).
 
 %% @doc Start the listener with callback module `Module' with default options linked to no process.
--spec(start/1 :: (Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}).
+-spec start(Module :: atom()) -> {'ok', pid()} | 'ignore' | {'error', any()}.
 start(Module) ->
 	start(Module, [[]]).
 
 %% @doc Stop the listener pid() `Pid' with reason `normal'.
--spec(stop/1 :: (Pid :: pid()) -> 'ok').
+-spec stop(Pid :: pid()) -> 'ok'.
 stop(Pid) ->
 	gen_server:call(Pid, stop).
 
@@ -116,9 +116,9 @@ sessions(Pid) ->
 %% ports are privileged and only bindable by root. The default protocol is
 %% `tcp', the default listen address is `0.0.0.0' and the default address family
 %% is `inet'. Anything passed in the `sessionoptions' option, is passed through
-%% to `gen_server_smtp_session'.
+%% to `gen_smtp_server_session'.
 %% @see gen_smtp_server_session
--spec(init/1 :: (Args :: list()) -> {'ok', #state{}} | {'stop', any()}).
+-spec init(Args :: list()) -> {'ok', #state{}} | {'stop', any()}.
 init([Module, Configurations]) ->
 	process_flag(trap_exit, true),
 	DefaultConfig = [{domain, smtp_util:guess_FQDN()}, {address, {0,0,0,0}},
@@ -146,11 +146,11 @@ extract_listener(Config, DefaultConfig) ->
     Protocol = proplists:get_value(protocol, NewConfig),
     SessionOptions = proplists:get_value(sessionoptions, NewConfig, []),
     ListenOptions = [binary, {ip, IP}, Family],
-    case socket:listen(Protocol, Port, ListenOptions) of
+    case smtp_socket:listen(Protocol, Port, ListenOptions) of
         {ok, ListenSocket} -> %%Create first accepting process
             error_logger:info_msg("~p listening on ~p:~p via ~p~n", [?MODULE, IP, Port, Protocol]),
-            socket:begin_inet_async(ListenSocket),
-            #listener{port = socket:extract_port_from_socket(ListenSocket),
+            smtp_socket:begin_inet_async(ListenSocket),
+            #listener{port = smtp_socket:extract_port_from_socket(ListenSocket),
                       hostname = Hostname, sessionoptions = SessionOptions,
                       socket = ListenSocket, listenoptions = ListenOptions};
         {error, Reason} = Error ->
@@ -184,13 +184,13 @@ handle_info({inet_async, ListenPort,_, {ok, ClientAcceptSocket}},
 					ListenPort -> L;
 					_ -> []
 				end || L <- Listeners]),
-		{ok, ClientSocket} = socket:handle_inet_async(Listener#listener.socket, ClientAcceptSocket, Listener#listener.listenoptions),
+		{ok, ClientSocket} = smtp_socket:handle_inet_async(Listener#listener.socket, ClientAcceptSocket, Listener#listener.listenoptions),
 		%% New client connected
 		% io:format("new client connection.~n", []),
 		Sessions = case gen_smtp_server_session:start(ClientSocket, Module, [{hostname, Listener#listener.hostname}, {sessioncount, length(CurSessions) + 1} | Listener#listener.sessionoptions]) of
 			{ok, Pid} ->
 				link(Pid),
-				socket:controlling_process(ClientSocket, Pid),
+				smtp_socket:controlling_process(ClientSocket, Pid),
 				CurSessions ++[Pid];
 			_Other ->
 				CurSessions
@@ -210,7 +210,7 @@ handle_info({'EXIT', From, Reason}, State) ->
 	end;
 handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
 	io:format("Client terminated connection with econnaborted~n"),
-	socket:begin_inet_async(ListenSocket),
+	smtp_socket:begin_inet_async(ListenSocket),
 	{noreply, State};
 handle_info({inet_async, _ListenSocket,_, Error}, State) ->
 	error_logger:error_msg("Error in socket acceptor: ~p.~n", [Error]),
@@ -222,7 +222,7 @@ handle_info(_Info, State) ->
 -spec terminate(Reason :: any(), State :: #state{}) -> 'ok'.
 terminate(Reason, State) ->
 	io:format("Terminating due to ~p~n", [Reason]),
-	lists:foreach(fun(#listener{socket=S}) -> catch socket:close(S) end, State#state.listeners),
+	lists:foreach(fun(#listener{socket=S}) -> catch smtp_socket:close(S) end, State#state.listeners),
 	ok.
 
 %% @hidden

@@ -47,7 +47,7 @@ mxlookup(Domain) ->
 	end,
 	case inet_res:lookup(Domain, in, mx) of
 		[] ->
-			[];
+			lists:map(fun(X) -> {10, inet_parse:ntoa(X)} end, inet_res:lookup(Domain, in, a));
 		Result ->
 			lists:sort(fun({Pref, _Name}, {Pref2, _Name2}) -> Pref =< Pref2 end, Result)
 	end.
@@ -60,18 +60,18 @@ guess_FQDN() ->
 	FQDN.
 
 %% @doc Compute the CRAM digest of `Key' and `Data'
--spec(compute_cram_digest/2 :: (Key :: binary(), Data :: string()) -> binary()).
+-spec compute_cram_digest(Key :: binary(), Data :: binary()) -> binary().
 compute_cram_digest(Key, Data) ->
-	Bin = crypto:md5_mac(Key, Data),
+	Bin = crypto:hmac(md5, Key, Data),
 	list_to_binary([io_lib:format("~2.16.0b", [X]) || <<X>> <= Bin]).
 
 %% @doc Generate a seed string for CRAM.
--spec(get_cram_string/1 :: (Hostname :: string()) -> string()).
+-spec get_cram_string(Hostname :: string()) -> string().
 get_cram_string(Hostname) ->
 	binary_to_list(base64:encode(lists:flatten(io_lib:format("<~B.~B@~s>", [crypto:rand_uniform(0, 4294967295), crypto:rand_uniform(0, 4294967295), Hostname])))).
 
 %% @doc Trim \r\n from `String'
--spec(trim_crlf/1 :: (String :: string()) -> string()).
+-spec trim_crlf(String :: string()) -> string().
 trim_crlf(String) ->
 	string:strip(string:strip(String, right, $\n), right, $\r).
 
@@ -104,34 +104,82 @@ zone(Val) when Val >= 0 ->
 %% @doc Generate a unique message ID 
 generate_message_id() ->
 	FQDN = guess_FQDN(),
-	Md5 = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([erlang:now(), FQDN]))],
+    Md5 = [io_lib:format("~2.16.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([unique_id(), FQDN]))],
 	io_lib:format("<~s@~s>", [Md5, FQDN]).
 
 %% @doc Generate a unique MIME message boundary
 generate_message_boundary() ->
 	FQDN = guess_FQDN(),
-	["_=", [io_lib:format("~2.36.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([erlang:now(), FQDN]))], "=_"].
+    ["_=", [io_lib:format("~2.36.0b", [X]) || <<X>> <= erlang:md5(term_to_binary([unique_id(), FQDN]))], "=_"].
 
+-ifdef(deprecated_now).
+unique_id() ->
+    {erlang:system_time(), erlang:unique_integer()}.
+-else.
+unique_id() ->
+    erlang:now().
+-endif.
 
 -define(is_whitespace(Ch), (Ch =< 32)).
 
+combine_rfc822_addresses([]) ->
+	<<>>;
 combine_rfc822_addresses(Addresses) ->
-	[_,_|Acc] = combine_rfc822_addresses(Addresses, []),
-	iolist_to_binary(lists:reverse(Acc)).
+	iolist_to_binary(combine_rfc822_addresses(Addresses, [])).
 
-combine_rfc822_addresses([], Acc) ->
-	Acc;
+combine_rfc822_addresses([], [32, $, | Acc]) ->
+	lists:reverse(Acc);
 combine_rfc822_addresses([{undefined, Email}|Rest], Acc) ->
 	combine_rfc822_addresses(Rest, [32, $,, Email|Acc]);
+combine_rfc822_addresses([{"", Email}|Rest], Acc) ->
+	combine_rfc822_addresses(Rest, [32, $,, Email|Acc]);
+combine_rfc822_addresses([{<<>>, Email}|Rest], Acc) ->
+	combine_rfc822_addresses(Rest, [32, $,, Email|Acc]);
 combine_rfc822_addresses([{Name, Email}|Rest], Acc) ->
-	combine_rfc822_addresses(Rest, [32, $,, $>, Email, $<, 32, opt_quoted(Name)|Acc]).
+	Quoted = [ opt_quoted(Name)," <", Email, ">" ],
+	combine_rfc822_addresses(Rest, [32, $,, Quoted|Acc]).
 
-opt_quoted(N)  ->
-	case re:run(N, "\"") of
-		nomatch -> N;
-		{match, _} ->
-			[$", re:replace(N, "\"", "\\\\\"", [global]), $"]
-	end.
+opt_quoted(B) when is_binary(B) ->
+	opt_quoted(binary_to_list(B));
+opt_quoted(S) when is_list(S) ->
+    NoControls = lists:map(
+        fun
+            (C) when C < 32 -> 32;
+            (C) -> C
+        end,
+        S),
+    case lists:any(fun is_special/1, NoControls) of
+        false -> NoControls;
+        true ->
+            lists:flatten([
+                $",
+                lists:map(
+                    fun
+                        ($\") -> [$\\, $"];
+                        ($\\) -> [$\\, $\\];
+                        (C) -> C
+                    end,
+                    NoControls),
+                $"])
+    end.
+
+% See https://www.w3.org/Protocols/rfc822/3_Lexical.html#z2
+is_special($() -> true;
+is_special($)) -> true;
+is_special($<) -> true;
+is_special($>) -> true;
+is_special($@) -> true;
+is_special($,) -> true;
+is_special($;) -> true;
+is_special($:) -> true;
+is_special($\\) -> true;
+is_special($\") -> true;
+is_special($.) -> true;
+is_special($[) -> true;
+is_special($]) -> true;
+is_special($') -> true; % special for some smtp servers
+is_special(_) -> false.
+
 
 parse_rfc822_addresses(B) when is_binary(B) ->
 	parse_rfc822_addresses(binary_to_list(B));
